@@ -131,6 +131,7 @@ public:
     void SetCursor(CursorType type) override;
     void* LoadCursorFile(const StringAnsi& path) const override;
     void SetCursorImage(void* handle) override;
+    void DestroyCursorImage(void* handle) override;
 
 #if USE_EDITOR
 
