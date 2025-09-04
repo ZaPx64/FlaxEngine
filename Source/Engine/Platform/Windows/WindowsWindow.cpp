@@ -883,6 +883,12 @@ void WindowsWindow::SetCursorImage(void* handle)
     _imageCursorHandle = handle;
 }
 
+void WindowsWindow::DestroyCursorImage(void* handle)
+{
+    _imageCursorHandle = 0;
+    ::DestroyCursor((HCURSOR)handle);
+}
+
 void WindowsWindow::UpdateRegion()
 {
 #if WINDOWS_USE_NEW_BORDER_LESS

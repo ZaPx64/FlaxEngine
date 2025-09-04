@@ -987,6 +987,9 @@ public:
     API_FUNCTION() virtual void SetCursorImage(void* handle) {
     };
 
+    API_FUNCTION() virtual void DestroyCursorImage(void* handle) {
+    };
+
 public:
     void OnShow();
     void OnResize(int32 width, int32 height);
