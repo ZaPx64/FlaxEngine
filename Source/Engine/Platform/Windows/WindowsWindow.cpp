@@ -807,65 +807,80 @@ void WindowsWindow::UpdateCursor()
         _cursorHiddenSafetyCount = 0;
     }
 
-    int32 index = 0;
-    switch (_cursor)
-    {
-    case CursorType::Default:
-        break;
-    case CursorType::Cross:
-        index = 1;
-        break;
-    case CursorType::Hand:
-        index = 2;
-        break;
-    case CursorType::Help:
-        index = 3;
-        break;
-    case CursorType::IBeam:
-        index = 4;
-        break;
-    case CursorType::No:
-        index = 5;
-        break;
-    case CursorType::Wait:
-        index = 11;
-        break;
-    case CursorType::SizeAll:
-        index = 6;
-        break;
-    case CursorType::SizeNESW:
-        index = 7;
-        break;
-    case CursorType::SizeNS:
-        index = 8;
-        break;
-    case CursorType::SizeNWSE:
-        index = 9;
-        break;
-    case CursorType::SizeWE:
-        index = 10;
-        break;
+    if (_cursor == CursorType::Image && _imageCursorHandle != 0) {
+        ::SetCursor((HCURSOR)_imageCursorHandle);
     }
+    else {
+        int32 index = 0;
+        switch (_cursor)
+        {
+        case CursorType::Default:
+            break;
+        case CursorType::Cross:
+            index = 1;
+            break;
+        case CursorType::Hand:
+            index = 2;
+            break;
+        case CursorType::Help:
+            index = 3;
+            break;
+        case CursorType::IBeam:
+            index = 4;
+            break;
+        case CursorType::No:
+            index = 5;
+            break;
+        case CursorType::Wait:
+            index = 11;
+            break;
+        case CursorType::SizeAll:
+            index = 6;
+            break;
+        case CursorType::SizeNESW:
+            index = 7;
+            break;
+        case CursorType::SizeNS:
+            index = 8;
+            break;
+        case CursorType::SizeNWSE:
+            index = 9;
+            break;
+        case CursorType::SizeWE:
+            index = 10;
+            break;
+        }
 
-    static const LPCWSTR cursors[] =
-    {
-        IDC_ARROW,
-        IDC_CROSS,
-        IDC_HAND,
-        IDC_HELP,
-        IDC_IBEAM,
-        IDC_NO,
-        IDC_SIZEALL,
-        IDC_SIZENESW,
-        IDC_SIZENS,
-        IDC_SIZENWSE,
-        IDC_SIZEWE,
-        IDC_WAIT,
-    };
+        static const LPCWSTR cursors[] =
+        {
+            IDC_ARROW,
+            IDC_CROSS,
+            IDC_HAND,
+            IDC_HELP,
+            IDC_IBEAM,
+            IDC_NO,
+            IDC_SIZEALL,
+            IDC_SIZENESW,
+            IDC_SIZENS,
+            IDC_SIZENWSE,
+            IDC_SIZEWE,
+            IDC_WAIT,
+        };
 
-    ASSERT(index >= 0 && index < ARRAY_COUNT(cursors));
-    const HCURSOR cursor = LoadCursorW(nullptr, cursors[index]);
-    ::SetCursor(cursor);
+        ASSERT(index >= 0 && index < ARRAY_COUNT(cursors));
+        const HCURSOR cursor = LoadCursorW(nullptr, cursors[index]);
+        ::SetCursor(cursor);
+    }
+}
+
+void* WindowsWindow::LoadCursorFile(const StringAnsi& path) const
+{
+    return (void*)::LoadCursorFromFileA((char*)path.GetText());
+}
+
+void WindowsWindow::SetCursorImage(void* handle)
+{
+    _imageCursorHandle = handle;
 }
 
 void WindowsWindow::UpdateRegion()
