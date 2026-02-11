@@ -113,6 +113,11 @@ API_ENUM() enum class CursorType
     /// </summary>
     Hidden,
 
+    /// <summary>
+    /// Use an image loaded via LoadCursor.
+    /// </summary>
+    Image,
+
     MAX
 };
 
@@ -974,6 +979,16 @@ public:
     /// <param name="button">Mouse button to check</param>
     /// <returns>True during the frame the user releases the button</returns>
     API_FUNCTION() bool GetMouseButtonUp(MouseButton button) const;
+
+    API_FUNCTION() virtual void* LoadCursorFile(const StringAnsi& path) const {
+        return 0;
+    };
+
+    API_FUNCTION() virtual void SetCursorImage(void* handle) {
+    };
+
+    API_FUNCTION() virtual void DestroyCursorImage(void* handle) {
+    };
 
 public:
     void OnShow();
