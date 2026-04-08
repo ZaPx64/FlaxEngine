@@ -2427,7 +2427,7 @@ namespace Flax.Build.Bindings
             contents.AppendLine();
             contents.AppendLine($"[assembly: AssemblyTitle(\"{binaryModuleName}\")]");
             contents.AppendLine("[assembly: AssemblyDescription(\"\")]");
-            contents.AppendLine("[assembly: AssemblyConfiguration(\"\")]");
+            contents.AppendLine($"[assembly: AssemblyConfiguration(\"{buildData.Configuration}\")]");
             contents.AppendLine($"[assembly: AssemblyCompany(\"{project.Company}\")]");
             contents.AppendLine("[assembly: AssemblyProduct(\"FlaxEngine\")]");
             contents.AppendLine($"[assembly: AssemblyCopyright(\"{project.Copyright}\")]");
@@ -2437,6 +2437,7 @@ namespace Flax.Build.Bindings
             contents.AppendLine($"[assembly: Guid(\"{id:d}\")]");
             contents.AppendLine($"[assembly: AssemblyVersion(\"{project.Version}\")]");
             contents.AppendLine($"[assembly: AssemblyFileVersion(\"{project.Version}\")]");
+            contents.AppendLine($"[assembly: AssemblyInformationalVersion(\"{project.VersionControlInfo}\")]");
 #if USE_NETCORE
             contents.AppendLine("[assembly: DisableRuntimeMarshalling]");
 #endif
