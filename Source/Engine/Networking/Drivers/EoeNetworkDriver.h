@@ -131,7 +131,8 @@ public:
     /// <param name="secondaryUrl">Optional secondary STUN server hostname or IP. Pass empty string to disable. When omitted, NAT classification falls back to RFC 3489 CHANGE-REQUEST against the primary server.</param>
     /// <param name="primaryPort">Primary STUN port (typically 3478).</param>
     /// <param name="secondaryPort">Alternate STUN port. Used together with the alternate IP to probe additional 4-tuples for NAT classification.</param>
-    API_FUNCTION() void SetStunServers(const String& primaryUrl, const String& secondaryUrl, uint16 primaryPort, uint16 secondaryPort);
+    /// <param name="forceIPv4">When true (default), STUN hostnames are resolved to IPv4 only and any IPv6 mapped address returned by the server is rejected. Keeps the externally-mapped address usable by peers that don't speak IPv6.</param>
+    API_FUNCTION() void SetStunServers(const String& primaryUrl, const String& secondaryUrl, uint16 primaryPort, uint16 secondaryPort, bool forceIPv4 = true);
 
     /// <summary>
     /// Kicks off a non-blocking NAT discovery run.

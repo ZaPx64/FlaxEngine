@@ -212,6 +212,49 @@ namespace
         enet_address_get_host_ip(&a, buf, sizeof(buf));
         return String(buf);
     }
+
+    // Resolve a hostname to an IPv4 address only, encoding the result as an IPv4-mapped
+    // IPv6 address (::ffff:a.b.c.d) so it fits ENetAddress::host (in6_addr). Returns true on success.
+    // We use this when the user opts into IPv4-only STUN so the request goes out over v4 and the
+    // server's reflected MAPPED-ADDRESS is also v4 - making the result usable by IPv4-only peers.
+    bool ResolveHostIPv4(const char* hostName, ENetAddress& out)
+    {
+        struct addrinfo hints = {};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_DGRAM;
+        struct addrinfo* resultList = nullptr;
+        if (getaddrinfo(hostName, nullptr, &hints, &resultList) != 0 || resultList == nullptr)
+            return false;
+
+        bool ok = false;
+        for (struct addrinfo* ai = resultList; ai; ai = ai->ai_next)
+        {
+            if (ai->ai_family != AF_INET || ai->ai_addrlen < (int)sizeof(struct sockaddr_in))
+                continue;
+            const struct sockaddr_in* sin = reinterpret_cast<const struct sockaddr_in*>(ai->ai_addr);
+            uint8* hostBytes = (uint8*)&out.host;
+            Platform::MemoryClear(hostBytes, 16);
+            hostBytes[10] = 0xFF;
+            hostBytes[11] = 0xFF;
+            Platform::MemoryCopy(hostBytes + 12, &sin->sin_addr, 4);
+            out.sin6_scope_id = 0;
+            ok = true;
+            break;
+        }
+        freeaddrinfo(resultList);
+        return ok;
+    }
+
+    // Returns true if the address is IPv4 (either native v4 or v4-mapped v6).
+    bool IsIPv4Address(const ENetAddress& a)
+    {
+        const uint8* h = (const uint8*)&a.host;
+        // ::ffff:a.b.c.d - IPv4-mapped IPv6
+        for (int i = 0; i < 10; i++)
+            if (h[i] != 0)
+                return false;
+        return h[10] == 0xFF && h[11] == 0xFF;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -257,6 +300,11 @@ namespace
 
 struct EoeStunImpl
 {
+    // When true, only IPv4 STUN endpoints are used and IPv6 mapped addresses in responses are rejected.
+    // Set by SetStunServers(); defaults to true so the externally-mapped address we report is always
+    // IPv4 (compatible with peers that don't speak IPv6).
+    bool forceIPv4 = true;
+
     // STUN endpoints derived from SetStunServers() and any OTHER-ADDRESS reflected by the server.
     bool hasPrimary = false;
     bool hasSecondary = false; // Set if a secondary URL was provided by the user.
@@ -693,7 +741,7 @@ NetworkDriverStats EoeNetworkDriver::GetStats(NetworkConnection target)
 // ---------------------------------------------------------------------------
 // STUN configuration / discovery API
 // ---------------------------------------------------------------------------
-void EoeNetworkDriver::SetStunServers(const String& primaryUrl, const String& secondaryUrl, uint16 primaryPort, uint16 secondaryPort)
+void EoeNetworkDriver::SetStunServers(const String& primaryUrl, const String& secondaryUrl, uint16 primaryPort, uint16 secondaryPort, bool forceIPv4)
 {
     if (!_impl)
     {
@@ -701,6 +749,7 @@ void EoeNetworkDriver::SetStunServers(const String& primaryUrl, const String& se
         return;
     }
 
+    _impl->forceIPv4 = forceIPv4;
     _impl->hasPrimary = false;
     _impl->hasSecondary = false;
     _impl->hasAlternate = false;
@@ -713,10 +762,17 @@ void EoeNetworkDriver::SetStunServers(const String& primaryUrl, const String& se
         return;
     }
 
-    StringAnsi primaryAnsi = primaryUrl.ToStringAnsi();
-    if (enet_address_set_host(&_impl->primaryAA, primaryAnsi.GetText()) != 0)
+    auto resolve = [forceIPv4](const char* host, ENetAddress& out) -> bool
     {
-        LOG(Warning, "[EoeNetworkDriver] Failed to resolve STUN primary host '{0}'.", primaryUrl);
+        if (forceIPv4)
+            return ResolveHostIPv4(host, out);
+        return enet_address_set_host(&out, host) == 0;
+    };
+
+    StringAnsi primaryAnsi = primaryUrl.ToStringAnsi();
+    if (!resolve(primaryAnsi.GetText(), _impl->primaryAA))
+    {
+        LOG(Warning, "[EoeNetworkDriver] Failed to resolve STUN primary host '{0}'{1}.", primaryUrl, forceIPv4 ? TEXT(" (IPv4-only)") : TEXT(""));
         return;
     }
     _impl->primaryAA.port = primaryPort;
@@ -728,7 +784,7 @@ void EoeNetworkDriver::SetStunServers(const String& primaryUrl, const String& se
     if (secondaryUrl.HasChars())
     {
         StringAnsi secondaryAnsi = secondaryUrl.ToStringAnsi();
-        if (enet_address_set_host(&_impl->secondaryBB, secondaryAnsi.GetText()) == 0)
+        if (resolve(secondaryAnsi.GetText(), _impl->secondaryBB))
         {
             _impl->secondaryBB.port = secondaryPort;
             _impl->secondaryBA = _impl->secondaryBB;
@@ -738,7 +794,7 @@ void EoeNetworkDriver::SetStunServers(const String& primaryUrl, const String& se
         }
         else
         {
-            LOG(Warning, "[EoeNetworkDriver] Failed to resolve STUN secondary host '{0}' - falling back to RFC 3489 CHANGE-REQUEST.", secondaryUrl);
+            LOG(Warning, "[EoeNetworkDriver] Failed to resolve STUN secondary host '{0}'{1} - falling back to RFC 3489 CHANGE-REQUEST.", secondaryUrl, forceIPv4 ? TEXT(" (IPv4-only)") : TEXT(""));
         }
     }
 }
@@ -1122,16 +1178,33 @@ void EoeNetworkDriver::HandleStunResponse(const ENetAddress& from, const uint8* 
         switch (attrType)
         {
         case STUN_ATTR_MAPPED_ADDRESS:
-            DecodeStunAddress(data + valueAt, attrLen, false, data + 8, t.mappedAddress);
+        {
+            ENetAddress tmp = {};
+            if (DecodeStunAddress(data + valueAt, attrLen, false, data + 8, tmp)
+                && (!_impl->forceIPv4 || IsIPv4Address(tmp)))
+                t.mappedAddress = tmp;
             break;
+        }
         case STUN_ATTR_XOR_MAPPED_ADDRESS:
-            DecodeStunAddress(data + valueAt, attrLen, true, data + 8, t.mappedAddress);
+        {
+            ENetAddress tmp = {};
+            if (DecodeStunAddress(data + valueAt, attrLen, true, data + 8, tmp)
+                && (!_impl->forceIPv4 || IsIPv4Address(tmp)))
+                t.mappedAddress = tmp;
             break;
+        }
         case STUN_ATTR_OTHER_ADDRESS:
         case STUN_ATTR_CHANGED_ADDRESS:
-            if (DecodeStunAddress(data + valueAt, attrLen, false, data + 8, t.otherAddress))
+        {
+            ENetAddress tmp = {};
+            if (DecodeStunAddress(data + valueAt, attrLen, false, data + 8, tmp)
+                && (!_impl->forceIPv4 || IsIPv4Address(tmp)))
+            {
+                t.otherAddress = tmp;
                 t.hasOtherAddress = true;
+            }
             break;
+        }
         default:
             break;
         }
