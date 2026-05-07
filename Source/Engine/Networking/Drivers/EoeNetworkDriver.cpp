@@ -314,6 +314,18 @@ EoeNetworkDriver::EoeNetworkDriver(const SpawnParams& params)
 {
 }
 
+EoeNetworkDriver::~EoeNetworkDriver()
+{
+    // Safety net: release the UDP socket and ENet state if the owner forgot to call Dispose().
+    // Without this, a leaked driver instance (e.g. surviving editor play-mode hot-reload) keeps
+    // the port bound and the next launch fails to bind the same port.
+    if (_host || _enetInitialized || _impl)
+    {
+        LOG(Warning, "[EoeNetworkDriver] Destructor running with live state - Dispose() should have been called explicitly.");
+        Dispose();
+    }
+}
+
 bool EoeNetworkDriver::SetupSocketAndStun(const NetworkConfig& config)
 {
     if (enet_initialize() != 0)
@@ -499,39 +511,64 @@ void EoeNetworkDriver::Disconnect(const NetworkConnection& connection)
 // ---------------------------------------------------------------------------
 // Per-tick driver pump - drains enet events and ticks STUN/punch state machines.
 // ---------------------------------------------------------------------------
-bool EoeNetworkDriver::PopEvent(NetworkEvent& eventPtr)
+void EoeNetworkDriver::DriveStunAndPunchTick()
 {
-    ASSERT(_host);
+    if (!_impl)
+        return;
 
     // Tick our own state machines first - this may emit packets via host->socket.
     TickStunStateMachine();
     TickHolePunchScheduler();
 
     // Surface a NAT-discovery completion to user code via the C# delegate.
-    // We cannot block here, so we just dispatch once when the result is ready.
-    if (_impl && _impl->resultReady && !_impl->resultDispatched)
+    if (_impl->resultReady && !_impl->resultDispatched)
     {
         _impl->resultDispatched = true;
         NatDiscovered(_impl->result);
     }
 
     // Surface inbound hole-punches to user code via the C# delegate.
-    if (_impl)
+    Array<EoeStunImpl::InboundPunch, HeapAllocation> drained;
     {
-        Array<EoeStunImpl::InboundPunch, HeapAllocation> drained;
-        {
-            ScopeLock lock(_impl->eventLock);
-            if (_impl->inboundPunches.HasItems())
-                drained = MoveTemp(_impl->inboundPunches);
-        }
-        for (const auto& p : drained)
-        {
-            EoeHolePunchEvent ev;
-            ev.Address = AddressToString(p.from);
-            ev.Port = p.from.port;
-            HolePunchReceived(ev);
-        }
+        ScopeLock lock(_impl->eventLock);
+        if (_impl->inboundPunches.HasItems())
+            drained = MoveTemp(_impl->inboundPunches);
     }
+    for (const auto& p : drained)
+    {
+        EoeHolePunchEvent ev;
+        ev.Address = AddressToString(p.from);
+        ev.Port = p.from.port;
+        HolePunchReceived(ev);
+    }
+}
+
+void EoeNetworkDriver::TickStun()
+{
+    if (!_host || !_impl)
+        return;
+    // Once a NetworkPeer is attached, the framework's PopEvent is the authoritative pump.
+    // Letting both sides call enet_host_service concurrently would race on the host's protocol state.
+    if (_networkHost != nullptr)
+        return;
+
+    DriveStunAndPunchTick();
+
+    // Drive enet so the intercept callback fires for received STUN packets. Discard any
+    // non-STUN ENet events that arrive in this phase - we have no peer to surface them to.
+    ENetEvent event;
+    while (enet_host_service(_host, &event, 0) > 0)
+    {
+        if (event.type == ENET_EVENT_TYPE_RECEIVE && event.packet)
+            enet_packet_destroy(event.packet);
+    }
+}
+
+bool EoeNetworkDriver::PopEvent(NetworkEvent& eventPtr)
+{
+    ASSERT(_host);
+
+    DriveStunAndPunchTick();
 
     ENetEvent event;
     const int result = enet_host_service(_host, &event, 0);

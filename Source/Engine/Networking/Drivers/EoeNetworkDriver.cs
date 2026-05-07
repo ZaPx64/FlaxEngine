@@ -9,45 +9,24 @@ namespace FlaxEngine.Networking
     partial class EoeNetworkDriver
     {
         /// <summary>
-        /// Awaitable variant of <see cref="StartNatDiscovery"/>. Subscribes to <see cref="NatDiscovered"/>,
-        /// kicks off discovery, and resolves with the result once the state machine completes.
+        /// Awaitable variant of <see cref="StartNatDiscovery"/>. Kicks off discovery and polls the
+        /// state machine to completion. Drives <see cref="TickStun"/> internally so this works
+        /// before <see cref="Initialize"/> has attached a <see cref="NetworkPeer"/> (i.e. immediately
+        /// after <see cref="InitializeStun"/>); once a peer is attached the framework's pump takes
+        /// over and <see cref="TickStun"/> becomes a no-op.
         /// </summary>
-        /// <param name="cancellationToken">Optional token. Cancellation unsubscribes the internal handler but does not stop the in-flight state machine - the result will simply be discarded.</param>
+        /// <param name="cancellationToken">Optional token. Cancellation aborts the wait; the in-flight state machine is left to finish or time out on its own.</param>
         /// <returns>Task that resolves with the discovery outcome.</returns>
-        public Task<EoeNatDiscoveryResult> DiscoverNatAsync(CancellationToken cancellationToken = default)
+        public async Task<EoeNatDiscoveryResult> DiscoverNatAsync(CancellationToken cancellationToken = default)
         {
-            var tcs = new TaskCompletionSource<EoeNatDiscoveryResult>(TaskCreationOptions.RunContinuationsAsynchronously);
-            Action<EoeNatDiscoveryResult> handler = null;
-            handler = result =>
+            StartNatDiscovery();
+            while (!IsNatDiscoveryComplete())
             {
-                NatDiscovered -= handler;
-                tcs.TrySetResult(result);
-            };
-            NatDiscovered += handler;
-
-            CancellationTokenRegistration ctr = default;
-            if (cancellationToken.CanBeCanceled)
-            {
-                ctr = cancellationToken.Register(() =>
-                {
-                    NatDiscovered -= handler;
-                    tcs.TrySetCanceled(cancellationToken);
-                });
+                cancellationToken.ThrowIfCancellationRequested();
+                TickStun();
+                await Task.Delay(20, cancellationToken);
             }
-
-            // Free the registration once the task completes either way.
-            tcs.Task.ContinueWith(_ => ctr.Dispose(), TaskContinuationOptions.ExecuteSynchronously);
-
-            try
-            {
-                StartNatDiscovery();
-            }
-            catch
-            {
-                NatDiscovered -= handler;
-                throw;
-            }
-            return tcs.Task;
+            return GetNatDiscoveryResult();
         }
 
         /// <summary>

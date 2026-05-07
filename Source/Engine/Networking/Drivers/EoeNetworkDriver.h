@@ -89,6 +89,8 @@ API_CLASS(Namespace="FlaxEngine.Networking", Sealed) class FLAXENGINE_API EoeNet
 {
     DECLARE_SCRIPTING_TYPE(EoeNetworkDriver);
 public:
+    ~EoeNetworkDriver();
+
     // [INetworkDriver]
     String DriverName() override
     {
@@ -143,6 +145,15 @@ public:
     /// <summary>True once the most recent <see cref="StartNatDiscovery"/> has finished.</summary>
     API_FUNCTION() bool IsNatDiscoveryComplete() const;
 
+    /// <summary>
+    /// Drives the STUN / hole-punch state machine and processes any received STUN packets when
+    /// no <see cref="NetworkPeer"/> is attached yet. Once <see cref="Initialize"/> has been called
+    /// the framework's per-tick <c>PopEvent</c> pump is the authoritative driver and this method
+    /// becomes a no-op. Call this in a polling loop (or use <c>DiscoverNatAsync</c>) while running
+    /// NAT discovery before a peer exists.
+    /// </summary>
+    API_FUNCTION() void TickStun();
+
     /// <summary>Returns the last known NAT discovery result. Valid after <see cref="IsNatDiscoveryComplete"/> returns true.</summary>
     API_FUNCTION() EoeNatDiscoveryResult GetNatDiscoveryResult() const;
 
@@ -176,6 +187,9 @@ private:
     // Internal helpers - see implementation file.
     void TickStunStateMachine();
     void TickHolePunchScheduler();
+    // Runs the STUN/punch state machine and dispatches NatDiscovered/HolePunchReceived events.
+    // Shared between PopEvent (framework-driven) and TickStun (user-driven, pre-peer phase).
+    void DriveStunAndPunchTick();
     void HandleStunResponse(const struct _ENetAddress& from, const uint8* data, int32 length);
     void HandleStunIndication(const struct _ENetAddress& from, const uint8* data, int32 length);
     void HandleStunRequest(const struct _ENetAddress& from, const uint8* data, int32 length);
