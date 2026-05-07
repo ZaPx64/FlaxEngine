@@ -206,8 +206,18 @@ namespace
         return memcmp(&a.host, &b.host, sizeof(a.host)) == 0;
     }
 
+    // Forward declaration: defined just below.
+    bool IsIPv4Address(const ENetAddress& a);
+
     String AddressToString(const ENetAddress& a)
     {
+        if (IsIPv4Address(a))
+        {
+            // Print as plain dotted-quad rather than the v4-mapped v6 form (::ffff:a.b.c.d) that
+            // enet_address_get_host_ip would emit. Peers that don't speak IPv6 can't parse the v6 form.
+            const uint8* h = (const uint8*)&a.host;
+            return String::Format(TEXT("{0}.{1}.{2}.{3}"), (int32)h[12], (int32)h[13], (int32)h[14], (int32)h[15]);
+        }
         char buf[64] = { 0 };
         enet_address_get_host_ip(&a, buf, sizeof(buf));
         return String(buf);
@@ -1001,7 +1011,33 @@ void EoeNetworkDriver::TickStunStateMachine()
         }
         case StunPhase::Test2:
         {
-            // Reply received from the alt IP+port, so any NAT in front of us accepts unsolicited inbound.
+            // The point of Test 2 is "can a packet from a DIFFERENT (IP, port) reach our mapping?"
+            // Many public STUN servers don't support CHANGE-REQUEST (single IP, or RFC 5780 only) and
+            // reply normally from the original endpoint. We MUST verify the source actually changed,
+            // otherwise we'd misclassify any reachable server as FullCone.
+            const bool hostChanged = memcmp(&t.responseFrom.host, &_impl->primaryAA.host, sizeof(t.responseFrom.host)) != 0;
+            const bool portChanged = t.responseFrom.port != _impl->primaryAA.port;
+            if (!hostChanged || !portChanged)
+            {
+                // Server didn't honor CHANGE-IP|PORT - treat as inconclusive and fall through like a timeout.
+                if (_impl->hasAlternate)
+                {
+                    _impl->phase = StunPhase::Test1Alt;
+                    _impl->current = StunTransaction();
+                    _impl->current.destination = _impl->secondaryBB;
+                    _impl->current.changeFlags = 0;
+                }
+                else
+                {
+                    _impl->phase = StunPhase::Test3;
+                    _impl->current = StunTransaction();
+                    _impl->current.destination = _impl->primaryAA;
+                    _impl->current.changeFlags = STUN_CHANGE_PORT;
+                }
+                StunSendCurrentTest();
+                return;
+            }
+            // Real Test 2 success: any NAT in front of us accepts unsolicited inbound.
             // Distinguish Open (no NAT) from FullCone by a port-preservation heuristic: if the mapped
             // port matches our locally bound port we likely have no NAT.
             const bool portPreserved = _impl->result.ExternalPort != 0
@@ -1029,7 +1065,18 @@ void EoeNetworkDriver::TickStunStateMachine()
         }
         case StunPhase::Test3:
         {
-            // Server replied from same IP, alt port -> address-restricted (any port from a known IP gets through).
+            // Test 3 only validates restricted-vs-port-restricted if the server actually replied
+            // from a DIFFERENT port (same IP). If the server ignored CHANGE-PORT and replied from
+            // the original endpoint, the test is inconclusive - report port-restricted as the
+            // safer (stricter) classification.
+            const bool hostUnchanged = memcmp(&t.responseFrom.host, &_impl->primaryAA.host, sizeof(t.responseFrom.host)) == 0;
+            const bool portChanged = t.responseFrom.port != _impl->primaryAA.port;
+            if (!hostUnchanged || !portChanged)
+            {
+                StunFinish(EoeNatType::PortRestrictedCone, true);
+                return;
+            }
+            // Real Test 3 success: any port from a known IP gets through -> address-restricted.
             StunFinish(EoeNatType::RestrictedCone, true);
             return;
         }
@@ -1156,15 +1203,18 @@ void EoeNetworkDriver::HandleStunResponse(const ENetAddress& from, const uint8* 
     if (memcmp(data + 8, t.txid, 12) != 0)
         return;
 
-    t.gotResponse = true;
-    t.responseFrom = from;
-
     const uint16 msgType = Read16BE(data + 0);
     if (msgType == STUN_BINDING_ERROR)
     {
-        // Treat error as "no usable response" - leave mappedAddress zeroed and let the state machine react.
+        // Server explicitly rejected the request (e.g. doesn't support CHANGE-REQUEST). Don't flag
+        // gotResponse - let the transaction time out so the state machine takes the same fallback
+        // path as a network drop (Test 2 -> Test1Alt/Test3, etc.). Treating it as a successful
+        // response would let Test 2 wrongly conclude FullCone on servers that don't honor CHANGE.
         return;
     }
+
+    t.gotResponse = true;
+    t.responseFrom = from;
 
     // Walk attributes, capture addresses.
     int32 cursor = STUN_HEADER_SIZE;
