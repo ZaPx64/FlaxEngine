@@ -17,6 +17,11 @@
 #include <enet/enet.h>
 #undef _WINSOCK_DEPRECATED_NO_WARNINGS
 #undef SendMessage
+#undef InterlockedIncrement
+#undef InterlockedDecrement
+#undef InterlockedCompareExchange
+#undef InterlockedExchange
+#undef InterlockedAdd
 
 // ---------------------------------------------------------------------------
 // STUN protocol constants (RFC 5389 / RFC 3489)
@@ -309,14 +314,8 @@ EoeNetworkDriver::EoeNetworkDriver(const SpawnParams& params)
 {
 }
 
-bool EoeNetworkDriver::Initialize(NetworkPeer* host, const NetworkConfig& config)
+bool EoeNetworkDriver::SetupSocketAndStun(const NetworkConfig& config)
 {
-    _networkHost = host;
-    _config = config;
-    _peerMap.Clear();
-    _isServer = false;
-    _peer = nullptr;
-
     if (enet_initialize() != 0)
     {
         LOG(Error, "[EoeNetworkDriver] Failed to initialize ENet.");
@@ -328,19 +327,19 @@ bool EoeNetworkDriver::Initialize(NetworkPeer* host, const NetworkConfig& config
     // can run before Connect() / Listen(). For server use the configured port; for clients pass
     // port=0 in the config to let the OS choose an ephemeral port.
     ENetAddress bindAddr = { 0 };
-    bindAddr.port = _config.Port;
+    bindAddr.port = config.Port;
     bindAddr.host = ENET_HOST_ANY;
-    if (_config.Address.HasChars() && _config.Address != TEXT("any") && _config.Address != TEXT("0.0.0.0") && _config.Address != TEXT("::"))
+    if (config.Address.HasChars() && config.Address != TEXT("any") && config.Address != TEXT("0.0.0.0") && config.Address != TEXT("::"))
     {
         // Best-effort: honor a specific bind address if the user supplied one.
-        enet_address_set_host(&bindAddr, _config.Address.ToStringAnsi().GetText());
+        enet_address_set_host(&bindAddr, config.Address.ToStringAnsi().GetText());
     }
 
-    const size_t peerSlots = Math::Max<size_t>(1, _config.ConnectionsLimit);
+    const size_t peerSlots = Math::Max<size_t>(1, config.ConnectionsLimit);
     _host = enet_host_create(&bindAddr, peerSlots, 1, 0, 0);
     if (_host == nullptr)
     {
-        LOG(Error, "[EoeNetworkDriver] Failed to create ENet host on port {0}.", _config.Port);
+        LOG(Error, "[EoeNetworkDriver] Failed to create ENet host on port {0}.", config.Port);
         enet_deinitialize();
         _enetInitialized = false;
         return true;
@@ -353,6 +352,50 @@ bool EoeNetworkDriver::Initialize(NetworkPeer* host, const NetworkConfig& config
         InterceptMap().Add(_host, this);
     }
     enet_host_set_intercept(_host, &EoeNetworkDriver::InterceptThunk);
+    return false;
+}
+
+bool EoeNetworkDriver::InitializeStun(const NetworkConfig& config)
+{
+    if (_host)
+    {
+        LOG(Warning, "[EoeNetworkDriver] InitializeStun: already initialized (bound port {0}); ignoring.", _host->address.port);
+        return false;
+    }
+    _networkHost = nullptr;
+    _config = config;
+    _peerMap.Clear();
+    _isServer = false;
+    _peer = nullptr;
+    if (SetupSocketAndStun(_config))
+        return true;
+    LOG(Info, "[EoeNetworkDriver] STUN initialized (bound port {0}); NetworkPeer not yet attached.", _host->address.port);
+    return false;
+}
+
+bool EoeNetworkDriver::Initialize(NetworkPeer* host, const NetworkConfig& config)
+{
+    if (_host)
+    {
+        // Socket already bound by InitializeStun - keep it so the STUN-derived NAT mapping stays valid.
+        const uint16 boundPort = _host->address.port;
+        if (config.Port != 0 && config.Port != boundPort)
+            LOG(Warning, "[EoeNetworkDriver] Initialize: config.Port {0} differs from STUN-bound port {1}; keeping bound port.", config.Port, boundPort);
+        _networkHost = host;
+        _config = config;
+        _config.Port = boundPort;
+        LOG(Info, "[EoeNetworkDriver] NetworkPeer attached to existing socket (port {0}).", boundPort);
+        return false;
+    }
+
+    _networkHost = host;
+    _config = config;
+    _peerMap.Clear();
+    _isServer = false;
+    _peer = nullptr;
+
+    if (SetupSocketAndStun(_config))
+        return true;
 
     LOG(Info, "[EoeNetworkDriver] Initialized (bound port {0}).", _host->address.port);
     return false;
@@ -521,9 +564,17 @@ bool EoeNetworkDriver::PopEvent(NetworkEvent& eventPtr)
         break;
     case ENET_EVENT_TYPE_RECEIVE:
         eventPtr.EventType = NetworkEventType::Message;
-        eventPtr.Message = _networkHost->CreateMessage();
-        eventPtr.Message.Length = event.packet->dataLength;
-        Platform::MemoryCopy(eventPtr.Message.Buffer, event.packet->data, event.packet->dataLength);
+        if (_networkHost)
+        {
+            eventPtr.Message = _networkHost->CreateMessage();
+            eventPtr.Message.Length = event.packet->dataLength;
+            Platform::MemoryCopy(eventPtr.Message.Buffer, event.packet->data, event.packet->dataLength);
+        }
+        else
+        {
+            // STUN-only phase: peer not attached yet, drop unexpected ENet payload.
+            eventPtr.EventType = NetworkEventType::Undefined;
+        }
         enet_packet_destroy(event.packet);
         break;
     default:

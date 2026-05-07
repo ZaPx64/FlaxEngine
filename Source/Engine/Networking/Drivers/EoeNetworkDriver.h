@@ -97,6 +97,19 @@ public:
 
     bool Initialize(NetworkPeer* host, const NetworkConfig& config) override;
     void Dispose() override;
+
+    /// <summary>
+    /// Phase-1 initialization for STUN / hole-punching before a <see cref="NetworkPeer"/> exists.
+    /// Binds the UDP socket using <paramref name="config"/> (port, address, connection limit) and
+    /// allocates the STUN state machine, but does not attach a peer. After this call you may use
+    /// <see cref="SetStunServers"/>, <see cref="StartNatDiscovery"/>, and <see cref="SendHolePunch"/>.
+    /// When the peer is later available, call <see cref="Initialize"/> with the same config to attach
+    /// it - the already-bound socket is reused so the externally-mapped port discovered by STUN
+    /// remains valid for the upcoming ENet traffic.
+    /// </summary>
+    /// <param name="config">Network configuration describing the bind port, address, and connection limit.</param>
+    /// <returns>True if initialization failed, false on success (matches <see cref="Initialize"/> convention).</returns>
+    API_FUNCTION() bool InitializeStun(const NetworkConfig& config);
     bool Listen() override;
     bool Connect() override;
     void Disconnect() override;
@@ -169,6 +182,10 @@ private:
     void StunSend(const struct _ENetAddress& dst, const uint8* data, int32 length);
     void StunFinish(EoeNatType natType, bool success);
     void StunSendCurrentTest();
+
+    // Shared bring-up for InitializeStun and Initialize: enet init, socket bind, STUN impl, intercept hookup.
+    // Returns true on failure (matches Initialize's return convention).
+    bool SetupSocketAndStun(const NetworkConfig& config);
 
 private:
     NetworkConfig _config;
