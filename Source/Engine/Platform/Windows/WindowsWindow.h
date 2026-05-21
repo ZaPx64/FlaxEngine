@@ -32,6 +32,7 @@ private:
     int _cursorHiddenSafetyCount = 0;
     float _opacity = 1.0f;
     bool _isDuringMaximize = false;
+    void* _imageCursorHandle = 0;
     Windows::HANDLE _monitor = nullptr;
     Windows::LONG _clipCursorRect[4];
     int32 _regionWidth = 0, _regionHeight = 0;
@@ -130,6 +131,9 @@ public:
     void StartClippingCursor(const Rectangle& bounds) override;
     void EndClippingCursor() override;
     void SetCursor(CursorType type) override;
+    void* LoadCursorFile(const StringAnsi& path) const override;
+    void SetCursorImage(void* handle) override;
+    void DestroyCursorImage(void* handle) override;
 
 #if USE_EDITOR
 

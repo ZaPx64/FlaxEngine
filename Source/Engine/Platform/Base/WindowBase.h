@@ -758,6 +758,16 @@ public:
     /// <returns>True during the frame the user releases the button</returns>
     API_FUNCTION() bool GetMouseButtonUp(MouseButton button) const;
 
+    API_FUNCTION() virtual void* LoadCursorFile(const StringAnsi& path) const {
+        return 0;
+    };
+
+    API_FUNCTION() virtual void SetCursorImage(void* handle) {
+    };
+
+    API_FUNCTION() virtual void DestroyCursorImage(void* handle) {
+    };
+
 public:
     void OnShow();
     void OnResize(int32 width, int32 height);
