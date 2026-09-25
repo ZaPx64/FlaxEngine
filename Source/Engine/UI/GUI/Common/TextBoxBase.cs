@@ -173,6 +173,16 @@ namespace FlaxEngine.GUI
         protected bool _consumeAllKeyDownEvents = true;
 
         /// <summary>
+        /// The horizontal caret location to keep when moving caret up or down across the lines of different length (NaN if not moving vertically).
+        /// </summary>
+        private float _caretLineMoveX = float.NaN;
+
+        /// <summary>
+        /// Flag used to indicate whenever caret is being moved up or down (to preserve the horizontal caret location).
+        /// </summary>
+        private bool _isCaretLineMoving;
+
+        /// <summary>
         /// Event fired when text gets changed
         /// </summary>
         public event Action TextChanged;
@@ -829,26 +839,19 @@ namespace FlaxEngine.GUI
         /// <param name="ctrl">Control is held.</param>
         protected virtual void MoveRight(bool shift, bool ctrl)
         {
-            if (HasSelection && !shift)
+            if (HasSelection && !shift && !ctrl)
             {
                 SetSelection(SelectionRight);
             }
-            else if (SelectionRight < TextLength || (_selectionEnd < _selectionStart && _selectionStart == TextLength))
+            else
             {
                 int position;
                 if (ctrl)
-                    position = FindNextWordBegin();
+                    position = FindNextWordBegin(CaretPosition);
                 else
-                    position = _selectionEnd + 1;
+                    position = Mathf.Min(CaretPosition + 1, TextLength);
 
-                if (shift)
-                {
-                    SetSelection(_selectionStart, position);
-                }
-                else
-                {
-                    SetSelection(position);
-                }
+                MoveCaret(position, shift);
             }
         }
 
@@ -859,26 +862,19 @@ namespace FlaxEngine.GUI
         /// <param name="ctrl">Control is held.</param>
         protected virtual void MoveLeft(bool shift, bool ctrl)
         {
-            if (HasSelection && !shift)
+            if (HasSelection && !shift && !ctrl)
             {
                 SetSelection(SelectionLeft);
             }
-            else if (SelectionLeft >= 0)
+            else
             {
                 int position;
                 if (ctrl)
-                    position = FindPrevWordBegin();
+                    position = FindPrevWordBegin(CaretPosition);
                 else
-                    position = Mathf.Max(_selectionEnd - 1, 0);
+                    position = Mathf.Max(CaretPosition - 1, 0);
 
-                if (shift)
-                {
-                    SetSelection(_selectionStart, position);
-                }
-                else
-                {
-                    SetSelection(position);
-                }
+                MoveCaret(position, shift);
             }
         }
 
@@ -889,23 +885,9 @@ namespace FlaxEngine.GUI
         /// <param name="ctrl">Control is held.</param>
         protected virtual void MoveDown(bool shift, bool ctrl)
         {
-            if (HasSelection && !shift)
-            {
-                SetSelection(SelectionRight);
-            }
-            else
-            {
-                int position = FindLineDownChar(CaretPosition);
-
-                if (shift)
-                {
-                    SetSelection(_selectionStart, position);
-                }
-                else
-                {
-                    SetSelection(position);
-                }
-            }
+            // Move from the selection edge if selection gets cleared
+            int caret = HasSelection && !shift ? SelectionRight : CaretPosition;
+            MoveCaretLine(FindLineDownChar(caret, GetCaretLineMoveX(caret)), shift);
         }
 
         /// <summary>
@@ -915,23 +897,41 @@ namespace FlaxEngine.GUI
         /// <param name="ctrl">Control is held.</param>
         protected virtual void MoveUp(bool shift, bool ctrl)
         {
-            if (HasSelection && !shift)
+            // Move from the selection edge if selection gets cleared
+            int caret = HasSelection && !shift ? SelectionLeft : CaretPosition;
+            MoveCaretLine(FindLineUpChar(caret, GetCaretLineMoveX(caret)), shift);
+        }
+
+        /// <summary>
+        /// Moves the caret to the given position.
+        /// </summary>
+        /// <param name="position">The new caret position.</param>
+        /// <param name="shift">Shift is held (extends the selection from its start instead of clearing it).</param>
+        protected void MoveCaret(int position, bool shift)
+        {
+            if (shift && _selectionStart != -1)
             {
-                SetSelection(SelectionLeft);
+                SetSelection(_selectionStart, position);
             }
             else
             {
-                int position = FindLineUpChar(CaretPosition);
-
-                if (shift)
-                {
-                    SetSelection(_selectionStart, position);
-                }
-                else
-                {
-                    SetSelection(position);
-                }
+                SetSelection(position);
             }
+        }
+
+        private void MoveCaretLine(int position, bool shift)
+        {
+            // Keep the horizontal caret location for the following up/down moves
+            _isCaretLineMoving = true;
+            MoveCaret(position, shift);
+            _isCaretLineMoving = false;
+        }
+
+        private float GetCaretLineMoveX(int caret)
+        {
+            if (float.IsNaN(_caretLineMoveX))
+                _caretLineMoveX = GetCharPosition(caret, out _).X;
+            return _caretLineMoveX;
         }
 
         /// <summary>
@@ -956,6 +956,8 @@ namespace FlaxEngine.GUI
             int textLength = _text.Length;
             _selectionStart = Mathf.Clamp(start, -1, textLength);
             _selectionEnd = Mathf.Clamp(end, -1, textLength);
+            if (!_isCaretLineMoving)
+                _caretLineMoveX = float.NaN;
 
             if (withScroll)
             {
@@ -967,85 +969,110 @@ namespace FlaxEngine.GUI
             }
         }
 
-        private int FindNextWordBegin()
+        private static int GetCharKind(char c)
+        {
+            // Words are made of letters, digits and underscores; any other visible character is punctuation
+            if (c == '\n')
+                return 0;
+            if (char.IsWhiteSpace(c))
+                return 1;
+            if (char.IsLetterOrDigit(c) || c == '_')
+                return 2;
+            return 3;
+        }
+
+        private int FindNextWordBegin(int index)
         {
             int textLength = TextLength;
-            int caretPos = CaretPosition;
-
-            if (caretPos + 1 >= textLength)
+            index = Mathf.Max(index, 0);
+            if (index >= textLength)
                 return textLength;
 
-            int spaceLoc = _text.IndexOfAny(Separators, caretPos + 1);
+            // Line end is a stop on its own
+            if (_text[index] == '\n')
+                return index + 1;
 
-            if (spaceLoc == -1)
-                spaceLoc = textLength;
-            else
-                spaceLoc++;
+            // Skip the rest of the current word (or punctuation) and then the whitespace after it
+            int kind = GetCharKind(_text[index]);
+            if (kind != 1)
+            {
+                while (index < textLength && GetCharKind(_text[index]) == kind)
+                    index++;
+            }
+            while (index < textLength && GetCharKind(_text[index]) == 1)
+                index++;
 
-            return spaceLoc;
+            return index;
         }
 
-        private int FindPrevWordBegin()
+        private int FindPrevWordBegin(int index)
         {
-            int caretPos = CaretPosition;
-
-            if (caretPos - 2 < 0)
+            index = Mathf.Min(index, TextLength);
+            if (index <= 0)
                 return 0;
 
-            int spaceLoc = _text.LastIndexOfAny(Separators, caretPos - 2);
+            // Line start is a stop on its own
+            if (_text[index - 1] == '\n')
+                return index - 1;
 
-            if (spaceLoc == -1)
-                spaceLoc = 0;
-            else
-                spaceLoc++;
+            // Skip the whitespace before the caret and then the word (or punctuation) before it
+            while (index > 0 && GetCharKind(_text[index - 1]) == 1)
+                index--;
+            if (index > 0)
+            {
+                int kind = GetCharKind(_text[index - 1]);
+                if (kind != 0)
+                {
+                    while (index > 0 && GetCharKind(_text[index - 1]) == kind)
+                        index--;
+                }
+            }
 
-            return spaceLoc;
+            return index;
         }
 
-        private int FindPrevLineBegin()
+        private int FindLineBegin(int index)
         {
-            int caretPos = CaretPosition;
-            if (caretPos - 2 < 0)
+            index = Mathf.Clamp(index, 0, TextLength);
+            if (index == 0)
                 return 0;
-            int newLineLoc = _text.LastIndexOf('\n', caretPos - 2);
-            if (newLineLoc == -1)
-                newLineLoc = 0;
-            else
-                newLineLoc++;
-            return newLineLoc;
+            return _text.LastIndexOf('\n', index - 1) + 1;
         }
 
-        private int FindNextLineBegin()
+        private int FindLineEnd(int index)
         {
-            int caretPos = CaretPosition;
-            if (caretPos + 2 > TextLength)
-                return TextLength;
-            int newLineLoc = _text.IndexOf('\n', caretPos + 2);
-            if (newLineLoc == -1)
-                newLineLoc = TextLength;
-            else
-                newLineLoc++;
-            return newLineLoc;
+            index = Mathf.Clamp(index, 0, TextLength);
+            int newLineLoc = _text.IndexOf('\n', index);
+            return newLineLoc == -1 ? TextLength : newLineLoc;
         }
 
-        private int FindLineDownChar(int index)
-        {
-            if (!IsMultiline)
-                return 0;
-
-            var location = GetCharPosition(index, out var height);
-            location.Y += height;
-
-            return HitTestText(location);
-        }
-
-        private int FindLineUpChar(int index)
+        private int FindLineDownChar(int index, float x)
         {
             if (!IsMultiline)
                 return _text.Length;
 
+            // Test the middle of the next line
             var location = GetCharPosition(index, out var height);
-            location.Y -= height;
+            location.X = x;
+            location.Y += height * 1.5f;
+            var lastLine = GetCharPosition(_text.Length, out var lastLineHeight);
+            if (location.Y >= lastLine.Y + lastLineHeight)
+                return _text.Length;
+
+            return HitTestText(location);
+        }
+
+        private int FindLineUpChar(int index, float x)
+        {
+            if (!IsMultiline)
+                return 0;
+
+            // Test the middle of the previous line
+            var location = GetCharPosition(index, out var height);
+            location.X = x;
+            location.Y -= height * 0.5f;
+            if (location.Y < GetCharPosition(0, out _).Y)
+                return 0;
 
             return HitTestText(location);
         }
@@ -1315,13 +1342,10 @@ namespace FlaxEngine.GUI
                 // Calculate char index under the mouse location
                 var hitPos = CharIndexAtPoint(ref location);
 
-                // Select range with shift
-                if (_selectionStart != -1 && RootWindow.GetKey(KeyboardKeys.Shift) && SelectionLength == 0)
+                // Select range with shift (from the selection start)
+                if (_selectionStart != -1 && RootWindow.GetKey(KeyboardKeys.Shift))
                 {
-                    if (hitPos < _selectionStart)
-                        SetSelection(hitPos, _selectionStart);
-                    else
-                        SetSelection(_selectionStart, hitPos);
+                    SetSelection(_selectionStart, hitPos);
                 }
                 else if (string.IsNullOrEmpty(_text))
                 {
@@ -1501,9 +1525,9 @@ namespace FlaxEngine.GUI
                 if (IsReadOnly)
                     return true;
 
-                if (ctrDown)
+                if (ctrDown && !HasSelection && CaretPosition > 0)
                 {
-                    int prevWordBegin = FindPrevWordBegin();
+                    int prevWordBegin = FindPrevWordBegin(CaretPosition);
                     _text = _text.Remove(prevWordBegin, CaretPosition - prevWordBegin);
                     SetSelection(prevWordBegin);
                     OnTextChanged();
@@ -1531,11 +1555,11 @@ namespace FlaxEngine.GUI
             {
                 if (IsScrollable && IsMultiline)
                 {
-                    var location = GetCharPosition(_selectionStart, out var height);
+                    var location = GetCharPosition(CaretPosition, out var height);
                     var sizeHeight = Size.Y / height;
                     location.Y += height * (int)sizeHeight;
                     TargetViewOffset = Vector2.Clamp(new Float2(0, location.Y), Float2.Zero, TextSize - new Float2(0, Size.Y));
-                    SetSelection(HitTestText(location));
+                    MoveCaret(HitTestText(location), shiftDown);
                 }
                 return true;
             }
@@ -1543,11 +1567,11 @@ namespace FlaxEngine.GUI
             {
                 if (IsScrollable && IsMultiline)
                 {
-                    var location = GetCharPosition(_selectionStart, out var height);
+                    var location = GetCharPosition(CaretPosition, out var height);
                     var sizeHeight =  Size.Y / height;
                     location.Y -= height * (int)sizeHeight;
                     TargetViewOffset = Vector2.Clamp(new Float2(0, location.Y), Float2.Zero, TextSize - new Float2(0, Size.Y));
-                    SetSelection(HitTestText(location));
+                    MoveCaret(HitTestText(location), shiftDown);
                 }
                 return true;
             }
@@ -1556,6 +1580,15 @@ namespace FlaxEngine.GUI
                 if (IsReadOnly)
                     return true;
 
+                if (ctrDown && !HasSelection && CaretPosition >= 0 && CaretPosition < TextLength)
+                {
+                    int nextWordBegin = FindNextWordBegin(CaretPosition);
+                    _text = _text.Remove(CaretPosition, nextWordBegin - CaretPosition);
+                    SetSelection(CaretPosition);
+                    OnTextChanged();
+                    return true;
+                }
+
                 int left = SelectionLeft;
                 if (HasSelection)
                 {
@@ -1563,7 +1596,7 @@ namespace FlaxEngine.GUI
                     SetSelection(left);
                     OnTextChanged();
                 }
-                else if (TextLength > 0 && left < TextLength)
+                else if (TextLength > 0 && left >= 0 && left < TextLength)
                 {
                     _text = _text.Remove(left, 1);
                     SetSelection(left);
@@ -1603,31 +1636,13 @@ namespace FlaxEngine.GUI
                     return false;
                 return true;
             case KeyboardKeys.Home:
-                if (shiftDown)
-                {
-                    // Select text from the current cursor point back to the beginning of the line
-                    if (_selectionStart != -1)
-                    {
-                        SetSelection(FindPrevLineBegin(), _selectionStart);
-                    }
-                }
-                else
-                {
-                    // Move caret to the first character
-                    SetSelection(0);
-                }
+                // Move caret to the beginning of the line (or the first character with control)
+                MoveCaret(ctrDown ? 0 : FindLineBegin(CaretPosition), shiftDown);
                 return true;
             case KeyboardKeys.End:
-            {
-                // Select text from the current cursor point to the beginning of a new line
-                if (shiftDown && _selectionStart != -1)
-                    SetSelection(_selectionStart, FindNextLineBegin());
-                // Move caret after last character
-                else
-                    SetSelection(TextLength);
-                
+                // Move caret to the end of the line (or after the last character with control)
+                MoveCaret(ctrDown ? TextLength : FindLineEnd(CaretPosition), shiftDown);
                 return true;
-            }
             case KeyboardKeys.Tab:
                 // Don't process
                 return false;
