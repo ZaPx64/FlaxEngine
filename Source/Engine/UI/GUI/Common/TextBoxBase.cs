@@ -1280,8 +1280,34 @@ namespace FlaxEngine.GUI
         }
 
         /// <inheritdoc />
+        public override Control OnNavigate(NavDirection direction, Float2 location, Control caller, List<Control> visited)
+        {
+            // Arrow keys move the caret when user is editing the text so don't navigate away from the text box
+            if (_isEditing && IsFocused && !IsNavFocused && caller != Parent)
+            {
+                switch (direction)
+                {
+                case NavDirection.Up:
+                case NavDirection.Down:
+                case NavDirection.Left:
+                case NavDirection.Right:
+                    return null;
+                }
+            }
+
+            return base.OnNavigate(direction, location, caller, visited);
+        }
+
+        /// <inheritdoc />
         public override void OnSubmit()
         {
+            // Return key inserts a new line when user is editing the multiline text so don't end editing
+            if (_isEditing && IsMultiline && !IsNavFocused)
+            {
+                base.OnSubmit();
+                return;
+            }
+
             OnEditEnd();
             if (IsNavFocused)
             {
