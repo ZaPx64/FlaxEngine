@@ -1039,7 +1039,10 @@ GPUDevice* GPUDeviceVulkan::Create()
 #endif
 
     // Create Vulkan instance
-    result = vkCreateInstance(&instInfo, nullptr, &Instance);
+    if (GPUDevice::CreationHints.CreateVulkanInstance.IsBinded())
+        result = (VkResult)GPUDevice::CreationHints.CreateVulkanInstance(&instInfo, &Instance);
+    else
+        result = vkCreateInstance(&instInfo, nullptr, &Instance);
     if (result == VK_ERROR_INCOMPATIBLE_DRIVER)
     {
         // Missing driver
@@ -1211,6 +1214,22 @@ GPUDevice* GPUDeviceVulkan::Create()
                 break;
             }
         }
+    }
+    const VkPhysicalDevice requiredGpu = GPUDevice::CreationHints.GetVulkanPhysicalDevice.IsBinded() ? (VkPhysicalDevice)GPUDevice::CreationHints.GetVulkanPhysicalDevice(Instance) : VK_NULL_HANDLE;
+    if (requiredGpu != VK_NULL_HANDLE)
+    {
+        bool found = false;
+        for (int32 i = 0; i < adapters.Count(); i++)
+        {
+            if (adapters[i].Gpu == requiredGpu)
+            {
+                selectedAdapterIndex = i;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            LOG(Warning, "Failed to find the required Vulkan adapter.");
     }
     ASSERT(adapters[selectedAdapterIndex].IsValid());
 
@@ -1688,7 +1707,14 @@ bool GPUDeviceVulkan::Init()
 #endif
 
     // Create the device
-    VALIDATE_VULKAN_RESULT(vkCreateDevice(gpu, &deviceInfo, nullptr, &Device));
+    if (GPUDevice::CreationHints.CreateVulkanDevice.IsBinded())
+    {
+        VALIDATE_VULKAN_RESULT((VkResult)GPUDevice::CreationHints.CreateVulkanDevice(gpu, &deviceInfo, &Device));
+    }
+    else
+    {
+        VALIDATE_VULKAN_RESULT(vkCreateDevice(gpu, &deviceInfo, nullptr, &Device));
+    }
 
 #if !PLATFORM_SWITCH
     // Optimize bindings
