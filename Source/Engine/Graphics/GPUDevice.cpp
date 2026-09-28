@@ -673,6 +673,8 @@ void GPUDevice::DrawEnd()
         useVSync = !CommandLine::Options.NoVSync.GetValue();
     else if (CommandLine::Options.VSync.HasValue())
         useVSync = CommandLine::Options.VSync.GetValue();
+    if (Engine::FramePacer.IsBinded())
+        useVSync = false; // Custom frame pacing waits for the next frame
 
     // Find index of the last rendered window task (use vsync only on the last window)
     int32 lastWindowIndex = -1;
