@@ -141,7 +141,7 @@ bool GPUBufferDX12::OnInit()
 #else
     D3D12_HEAP_FLAGS heapFlags = D3D12_HEAP_FLAG_NONE;
 #endif
-    D3D12_RESOURCE_STATES initialState = D3D12_RESOURCE_STATE_COMMON;
+    D3D12_RESOURCE_STATES initialState = heapProperties.Type == D3D12_HEAP_TYPE_READBACK ? D3D12_RESOURCE_STATE_COPY_DEST : D3D12_RESOURCE_STATE_COMMON;
     VALIDATE_DIRECTX_CALL(_device->GetDevice()->CreateCommittedResource(&heapProperties, heapFlags, &resourceDesc, initialState, nullptr, IID_PPV_ARGS(&resource)));
 
     // Set state
