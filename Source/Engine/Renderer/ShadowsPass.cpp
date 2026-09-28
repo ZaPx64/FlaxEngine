@@ -187,6 +187,7 @@ struct ShadowAtlasLight
     uint64 LastFrameUsed;
     int32 ContextIndex;
     int32 ContextCount;
+    uint32 ShadowsBufferAddress;
     uint16 Resolution;
     uint16 StaticResolution;
     uint8 TilesNeeded;
@@ -432,6 +433,12 @@ public:
     {
     }
 };
+
+const ShadowsCustomBuffer* GetLinkedShadows(const RenderBuffers* renderBuffers)
+{
+    const ShadowsCustomBuffer* linkedShadows = renderBuffers->LinkedShadows ? renderBuffers->LinkedShadows->FindCustomBuffer<ShadowsCustomBuffer>(TEXT("Shadows"), false) : nullptr;
+    return linkedShadows && linkedShadows->LastFrameUsed == Engine::FrameCount ? linkedShadows : nullptr;
+}
 
 void ShadowsAtlasRectTile::OnInsert(ShadowsCustomBuffer* buffer, bool isStatic)
 {
@@ -1448,11 +1455,13 @@ RETRY_ATLAS_SETUP:
         if (atlasLight.Tiles[0].RectTile == nullptr)
         {
             light->ShadowsBufferAddress = 0; // Clear to indicate no shadow
+            atlasLight.ShadowsBufferAddress = 0;
             continue;
         }
 
         // Cache start of the shadow data for this light
         light->ShadowsBufferAddress = shadows.ShadowsBuffer.Data.Count() / sizeof(Float4);
+        atlasLight.ShadowsBufferAddress = light->HasShadow ? light->ShadowsBufferAddress : 0; // Used by views that share the shadow maps
 
         // Write shadow data (this must match HLSL)
         {
@@ -1648,7 +1657,10 @@ void ShadowsPass::RenderShadowMask(RenderContextBatch& renderContextBatch, Rende
     PROFILE_GPU_CPU("Shadow");
     GPUContext* context = GPUDevice::Instance->GetMainContext();
     RenderContext& renderContext = renderContextBatch.GetMainContext();
-    const ShadowsCustomBuffer& shadows = *renderContext.Buffers->FindCustomBuffer<ShadowsCustomBuffer>(TEXT("Shadows"), false);
+    const ShadowsCustomBuffer* shadowsPtr = renderContext.Buffers->FindCustomBuffer<ShadowsCustomBuffer>(TEXT("Shadows"), false);
+    if (shadowsPtr == nullptr || shadowsPtr->LastFrameUsed != Engine::FrameCount)
+        shadowsPtr = GetLinkedShadows(renderContext.Buffers);
+    const ShadowsCustomBuffer& shadows = *shadowsPtr;
     ASSERT(shadows.LastFrameUsed == Engine::FrameCount);
     auto& view = renderContext.View;
     auto shader = _shader->GetShader();
@@ -1733,6 +1745,8 @@ void ShadowsPass::RenderShadowMask(RenderContextBatch& renderContextBatch, Rende
 void ShadowsPass::GetShadowAtlas(const RenderBuffers* renderBuffers, GPUTexture*& shadowMapAtlas, GPUBufferView*& shadowsBuffer)
 {
     const ShadowsCustomBuffer* shadowsPtr = renderBuffers->FindCustomBuffer<ShadowsCustomBuffer>(TEXT("Shadows"), false);
+    if (shadowsPtr == nullptr || shadowsPtr->LastFrameUsed != Engine::FrameCount)
+        shadowsPtr = GetLinkedShadows(renderBuffers);
     if (shadowsPtr && shadowsPtr->ShadowMapAtlas && shadowsPtr->LastFrameUsed == Engine::FrameCount)
     {
         shadowMapAtlas = shadowsPtr->ShadowMapAtlas;
