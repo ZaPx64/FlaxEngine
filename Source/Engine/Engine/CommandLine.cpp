@@ -162,6 +162,8 @@ bool CommandLine::Parse(const Char* cmdLine)
     PARSE_BOOL_SWITCH("-monolog ", MonoLog);
     PARSE_BOOL_SWITCH("-mute ", Mute);
     PARSE_BOOL_SWITCH("-lowdpi ", LowDPI);
+    PARSE_BOOL_SWITCH("-xr ", XR);
+    PARSE_BOOL_SWITCH("-noxr ", NoXR);
 
 #if PLATFORM_LINUX && PLATFORM_SDL
     PARSE_BOOL_SWITCH("-wayland ", Wayland);
