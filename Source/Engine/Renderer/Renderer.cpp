@@ -439,6 +439,7 @@ void RenderInner(SceneRenderTask* task, RenderContext& renderContext, RenderCont
             e->PreRender(context, renderContext);
     }
     renderContext.View.Prepare(renderContext);
+    renderContext.LodProxyView = task->ProxyView; // Use the proxy view for models LOD (eg. to draw the same LODs in both eyes in XR)
 
     // Build batch of render contexts (main view and shadow projections)
     {
