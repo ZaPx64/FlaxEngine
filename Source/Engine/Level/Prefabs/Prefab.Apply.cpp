@@ -1027,8 +1027,34 @@ bool Prefab::ApplyAllInternal(Actor* targetActor, bool linkTargetActorObjectToPr
         rapidjson_flax::Document targetDataDocument;
         if (NestedPrefabs.HasItems())
         {
+            // Use initial data buffer (unstripped) but reorder objects to match the sequence (eg. when new object was added to the nested prefab)
+            // SetupPrefabInstances pairs objects with data by index: sceneObjects has the new objects at the end, the target data where they sit in the hierarchy
+            // Based on upstream ff526ecaf, but places each new object at its own data index: inserting them in Dictionary order shifts one another when there are several
             targetDataDocument.Parse(dataBuffer.GetString(), dataBuffer.GetSize());
-            SceneObjectsFactory::PrefabSyncData prefabSyncData(*sceneObjects.Value, targetDataDocument, modifier.Value);
+            const int32 reorderedCount = sceneObjects->Count();
+            Array<SceneObject*> reorderedObjects;
+            reorderedObjects.Resize(reorderedCount);
+            Array<bool> isNewObjectSlot;
+            isNewObjectSlot.Resize(reorderedCount);
+            isNewObjectSlot.SetAll(false);
+            newPrefabInstanceIdToDataIndexCounter = 0;
+            for (auto i = newPrefabInstanceIdToDataIndex.Begin(); i.IsNotEnd(); ++i)
+            {
+                SceneObject* newObject = sceneObjects->At(newPrefabInstanceIdToDataIndexStart + newPrefabInstanceIdToDataIndexCounter++);
+                const int32 dataIndex = i->Value;
+                if (dataIndex >= 0 && dataIndex < reorderedCount)
+                {
+                    reorderedObjects[dataIndex] = newObject;
+                    isNewObjectSlot[dataIndex] = true;
+                }
+            }
+            int32 existingObjectIndex = 0;
+            for (int32 i = 0; i < reorderedCount; i++)
+            {
+                if (!isNewObjectSlot[i])
+                    reorderedObjects[i] = existingObjectIndex < ObjectsCount ? sceneObjects->At(existingObjectIndex++) : nullptr;
+            }
+            SceneObjectsFactory::PrefabSyncData prefabSyncData(reorderedObjects, targetDataDocument, modifier.Value);
             SceneObjectsFactory::SetupPrefabInstances(context, prefabSyncData);
 
             if (context.Instances.HasItems())
